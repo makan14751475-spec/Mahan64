@@ -1,0 +1,213 @@
+config_bot/
+├── main.py
+├── database.py
+└── config.py
+# توکن ربات روبیکا
+BOT_TOKEN = "CGEFBH0EJJJTEOVEJOKZCPLAFVJZTHKISEFNXKFQQIKIYDTASPQCVVKKTYPOPBJO"
+
+# اطلاعات پشتیبانی و پرداخت
+SUPPORT_ID = "@iD_BoB_SeLL"
+CARD_NUMBER = "6219861862176459"
+CARD_HOLDER = "رشیدی"
+
+# تعرفه‌ها: {حجم (گیگ): قیمت (تومان)}
+PLANS = {
+    1:  15_000,
+    2:  27_000,
+    3:  40_000,
+    4:  50_000,
+    5:  60_000,
+    6:  70_000,
+    7:  80_000,
+    8:  90_000,
+    9:  100_000,
+    10: 110_000,
+    20: 210_000,
+    30: 310_000,
+    40: 410_000,
+    50: 510_000,
+}
+# وضعیت کاربران
+user_states = {}      # {user_id: "state_name"}
+user_orders = {}      # {user_id: {"gb": int, "price": int, "status": str}}
+from rubka import Bot, types  # نام کتابخانه رو بر اساس کتابخانه انتخابی‌ت تنظیم کن
+from config import BOT_TOKEN, SUPPORT_ID, CARD_NUMBER, CARD_HOLDER, PLANS
+from database import user_states, user_orders
+
+bot = Bot(token=BOT_TOKEN)
+
+
+# ---------- کیبوردها ----------
+
+def main_menu():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton("🛒 خرید کانفیگ")],
+            [types.KeyboardButton("📋 مشاهده تعرفه‌ها")],
+            [types.KeyboardButton(f"📞 پشتیبانی {SUPPORT_ID}")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def plans_keyboard():
+    rows = []
+    row = []
+    for gb in PLANS.keys():
+        row.append(types.KeyboardButton(f"{gb} گیگ"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([types.KeyboardButton("🔙 بازگشت")])
+    return types.ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def back_keyboard():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[[types.KeyboardButton("🔙 بازگشت")]],
+        resize_keyboard=True,
+    )
+
+
+# ---------- ابزار ----------
+
+def format_price(price: int) -> str:
+    return f"{price:,}"
+
+
+def plans_text() -> str:
+    lines = ["📋 <b>تعرفه‌های کانفیگ</b>\n"]
+    for gb, price in PLANS.items():
+        lines.append(f"• {gb} گیگ : {format_price(price)} تومان")
+    return "\n".join(lines)
+
+
+# ---------- هندلرها ----------
+
+@bot.message_handler(commands=["start"])
+def start(message):
+    user_states[message.from_user.id] = "main"
+    bot.send_message(
+        message.chat.id,
+        "👋 سلام!\nبه ربات فروش کانفیگ خوش آمدید.\n\n"
+        "از منوی زیر یک گزینه را انتخاب کنید:",
+        reply_markup=main_menu(),
+        parse_mode="HTML",
+    )
+
+
+@bot.message_handler(func=lambda m: m.text == "🛒 خرید کانفیگ")
+def buy_config(message):
+    user_states[message.from_user.id] = "select_plan"
+    bot.send_message(
+        message.chat.id,
+        "📦 لطفاً حجم کانفیگ مورد نظر خود را انتخاب کنید:",
+        reply_markup=plans_keyboard(),
+    )
+
+
+@bot.message_handler(func=lambda m: m.text == "📋 مشاهده تعرفه‌ها")
+def show_plans(message):
+    bot.send_message(
+        message.chat.id,
+        plans_text(),
+        reply_markup=main_menu(),
+        parse_mode="HTML",
+    )
+
+
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("📞 پشتیبانی"))
+def support(message):
+    bot.send_message(
+        message.chat.id,
+        f"📞 برای ارتباط با پشتیبانی به آیدی زیر مراجعه کنید:\n{SUPPORT_ID}",
+        reply_markup=main_menu(),
+    )
+
+
+@bot.message_handler(func=lambda m: m.text == "🔙 بازگشت")
+def back(message):
+    user_states[message.from_user.id] = "main"
+    bot.send_message(
+        message.chat.id,
+        "🏠 به منوی اصلی بازگشتید.",
+        reply_markup=main_menu(),
+    )
+
+
+@bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id) == "select_plan"
+    and m.text
+    and m.text.endswith("گیگ")
+)
+def choose_plan(message):
+    try:
+        gb = int(message.text.split()[0])
+    except (ValueError, IndexError):
+        return
+
+    if gb not in PLANS:
+        bot.send_message(message.chat.id, "❌ این حجم موجود نیست.")
+        return
+
+    price = PLANS[gb]
+    user_orders[message.from_user.id] = {
+        "gb": gb,
+        "price": price,
+        "status": "awaiting_receipt",
+    }
+    user_states[message.from_user.id] = "awaiting_receipt"
+
+    text = (
+        f"🧾 <b>سفارش شما</b>\n\n"
+        f"📦 حجم: {gb} گیگ\n"
+        f"💰 مبلغ قابل پرداخت: <b>{format_price(price)} تومان</b>\n\n"
+        f"💳 شماره کارت:\n<code>{CARD_NUMBER}</code>\n"
+        f"👤 نام صاحب کارت: {CARD_HOLDER}\n\n"
+        f"پس از واریز، <b>تصویر رسید</b> خود را همین‌جا ارسال کنید."
+    )
+    bot.send_message(
+        message.chat.id,
+        text,
+        reply_markup=back_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@bot.message_handler(
+    content_types=["photo"],
+    func=lambda m: user_states.get(m.from_user.id) == "awaiting_receipt",
+)
+def receive_receipt(message):
+    order = user_orders.get(message.from_user.id, {})
+    order["status"] = "pending_approval"
+    user_orders[message.from_user.id] = order
+    user_states[message.from_user.id] = "main"
+
+    bot.send_message(
+        message.chat.id,
+        "✅ رسید پرداخت شما دریافت شد.\n\n"
+        "⏳ در حال تأیید رسید شما هستیم؛ لطفاً صبور باشید.",
+        reply_markup=main_menu(),
+    )
+
+    # اطلاع به مدیر (اختیاری ولی مفید برای پیگیری)
+    try:
+        bot.send_message(
+            SUPPORT_ID,
+            f"🔔 سفارش جدید\n"
+            f"👤 کاربر: {message.from_user.id}\n"
+            f"📦 حجم: {order.get('gb')} گیگ\n"
+            f"💰 مبلغ: {format_price(order.get('price', 0))} تومان",
+        )
+    except Exception:
+        pass
+
+
+# ---------- اجرا ----------
+
+if __name__ == "__main__":
+    print("🤖 Bot is running...")
+    bot.polling()
